@@ -19,7 +19,13 @@ interface AlertData {
   message: string;
 }
 
-type UiData = ProgressData | SummaryData | AlertData;
+interface ActivityData {
+  type: 'activity';
+  icon: string;
+  label: string;
+}
+
+type UiData = ProgressData | SummaryData | AlertData | ActivityData;
 
 export default function UiBlock({ raw }: { raw: string }) {
   let data: UiData;
@@ -61,6 +67,20 @@ export default function UiBlock({ raw }: { raw: string }) {
             </div>
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (data.type === 'activity') {
+    return (
+      <div className="my-1.5 flex items-center gap-2 text-xs text-gray-400 bg-gray-700/30 rounded-lg px-3 py-2 border border-gray-600/30">
+        <span className="text-base leading-none">{data.icon}</span>
+        <span className="truncate font-mono">{data.label}</span>
+        <span className="ml-auto shrink-0 flex gap-0.5">
+          <span className="w-1 h-1 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+          <span className="w-1 h-1 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+          <span className="w-1 h-1 rounded-full bg-blue-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+        </span>
       </div>
     );
   }

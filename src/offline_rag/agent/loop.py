@@ -12,43 +12,45 @@ logger = logging.getLogger(__name__)
 MAX_STEPS = 15
 
 AGENT_SYSTEM = """\
-You are a universal AI assistant with tool access. You run entirely on the user's local \
-machine via Ollama — no cloud, no subscription.
+You are a universal AI assistant with tool access running on the user's local machine.
 
-## Tools available
-- web_search      — Search DuckDuckGo for anything
-- web_fetch       — Read any webpage in full
-- run_python      — Execute Python code on the user's Windows machine
-- run_shell       — Execute PowerShell on the user's Windows machine
+## MOST IMPORTANT RULES — follow these exactly
+1. **Act immediately.** When the user asks you to do something, call the right tool NOW. \
+Do NOT say "I'll do that", "Let me...", "Sure!", or "I'll start by...". Just call the tool.
+2. **Never ask for permission** for non-risky actions. Just do it.
+3. **Never describe what you're about to do** — the tool output speaks for itself.
+4. After tool results come back, give a short summary of what happened and what's next.
+5. If a task has multiple steps, execute the first tool call immediately with no preamble.
+
+## Risky actions (system will ask user to confirm — you do NOT need to warn them)
+run_python · run_shell · write_file · move_file · delete_file · install_package · delete_skill
+
+## Tools
+- web_search      — DuckDuckGo search
+- web_fetch       — Read any webpage
+- run_python      — Execute Python on user's Windows machine ⚠ needs confirmation
+- run_shell       — Execute PowerShell ⚠ needs confirmation
 - read_file       — Read any file
-- write_file      — Write content to a file (creates or overwrites)
+- write_file      — Create/overwrite a file ⚠ needs confirmation
 - list_files      — List files in a directory
-- move_file       — Move or rename a file
-- delete_file     — Delete a file or directory
-- make_slides     — Create a PowerPoint (.pptx) or PDF presentation
-- rag_search      — Search the user's personal indexed documents
-- index_documents — Add documents to the searchable index
-- learn_skill     — Research and save a new Python skill you can reuse forever
-- list_skills     — Show all previously learned skills
-- delete_skill    — Remove a learned skill permanently
+- move_file       — Move or rename ⚠ needs confirmation
+- delete_file     — Delete ⚠ needs confirmation
+- make_slides     — Create .pptx or .pdf presentation
+- rag_search      — Search the user's indexed documents
+- index_documents — Index documents so they become searchable (streams live progress)
+- learn_skill     — Research + save a new Python skill permanently
+- list_skills     — List saved skills
+- delete_skill    — Delete a skill ⚠ needs confirmation
 
-## How to behave
-1. Be decisive. Make reasonable assumptions rather than asking clarifying questions.
-2. If you don't know how to do something, use web_search + web_fetch to learn, \
-   then write and save a skill with learn_skill so you can do it next time too.
-3. Work step by step. Use tools to gather information before acting.
-4. The system automatically asks the user before executing run_python, run_shell, \
-write_file, move_file, delete_file, install_package, or delete_skill — you do not \
-need to warn the user yourself.
-5. Show brief reasoning before each tool call so the user can follow along.
-6. When answering from web results, cite the source URL.
-7. If a tool fails, adapt and try a different approach.
-8. Use rag_search first when the user asks about their own documents.
-9. When you learn a new skill, call it immediately to complete the user's request.
+## Other rules
+- If you don't know how to do something, web_search + web_fetch to learn it, then learn_skill.
+- When you learn a new skill, call it immediately to complete the task.
+- Cite source URLs when answering from web results.
+- Use rag_search first when the user asks about their own documents.
+- If a tool fails, try a different approach without asking the user.
 
 ## Environment
-- Windows 11, PowerShell 5.1 available
-- Python available as `python`
+- Windows 11, PowerShell 5.1, Python via miniconda at C:/Users/Neel/miniconda3
 - User home: C:/Users/Neel
 """
 
@@ -76,30 +78,52 @@ def _is_affirmative(text: str) -> bool:
 def _tool_progress(name: str, args: dict) -> str:
     match name:
         case "web_search":
-            return f'🔍 Searching: *{args.get("query", "")}*'
+            label = f'Searching web: "{args.get("query", "")}"'
+            icon = "🔍"
         case "web_fetch":
-            return f'📄 Fetching: {args.get("url", "")}'
+            label = f'Reading: {args.get("url", "")}'
+            icon = "📄"
         case "read_file":
-            return f'📂 Reading: `{args.get("path", "")}`'
+            label = f'Reading file: {args.get("path", "")}'
+            icon = "📂"
         case "list_files":
-            return f'📁 Listing: `{args.get("path", "")}`'
+            label = f'Listing: {args.get("path", "")}'
+            icon = "📁"
         case "make_slides":
-            return f'📊 Creating presentation: *{args.get("title", "")}*'
+            label = f'Creating presentation: {args.get("title", "")}'
+            icon = "📊"
         case "rag_search":
-            return f'🔎 Searching your documents: *{args.get("query", "")}*'
+            label = f'Searching your documents: "{args.get("query", "")}"'
+            icon = "🔎"
         case "install_package":
-            return f'📦 Installing: `{args.get("package", "")}`'
+            label = f'Installing: {args.get("package", "")}'
+            icon = "📦"
         case "index_documents":
             paths = ", ".join(args.get("paths", []))
-            return f'📥 Indexing: {paths}'
+            label = f'Indexing: {paths}'
+            icon = "📥"
         case "learn_skill":
-            return f'🧠 Learning skill: `{args.get("name", "")}`'
+            label = f'Learning new skill: {args.get("name", "")}'
+            icon = "🧠"
         case "list_skills":
-            return '📋 Listing learned skills…'
+            label = "Listing saved skills"
+            icon = "📋"
         case "delete_skill":
-            return f'🗑️ Deleting skill: `{args.get("name", "")}`'
+            label = f'Deleting skill: {args.get("name", "")}'
+            icon = "🗑️"
+        case "run_python":
+            label = f'Running Python: {args.get("description", "code")}'
+            icon = "🐍"
+        case "run_shell":
+            label = f'Running shell: {args.get("description", args.get("command", ""))[:60]}'
+            icon = "💻"
+        case "write_file":
+            label = f'Writing file: {args.get("path", "")}'
+            icon = "✏️"
         case _:
-            return f'⚙️ Running: `{name}`'
+            label = f'Running: {name}'
+            icon = "⚙️"
+    return f'```ui\n{{"type":"activity","icon":"{icon}","label":{json.dumps(label)}}}\n```'
 
 
 def _confirmation_prompt(name: str, args: dict) -> str:
