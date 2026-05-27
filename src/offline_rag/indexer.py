@@ -7,6 +7,7 @@ from pathlib import Path
 
 import aiosqlite
 import pathspec
+from contextlib import asynccontextmanager
 from tqdm import tqdm
 
 from offline_rag.chunker import make_chunks
@@ -71,11 +72,12 @@ class FileIndexer:
             "gitwildmatch", config.ignore_patterns or []
         )
 
-    async def _state_db(self) -> aiosqlite.Connection:
-        conn = await aiosqlite.connect(str(self.state_db_path))
-        await conn.execute(_STATE_SCHEMA)
-        await conn.commit()
-        return conn
+    @asynccontextmanager
+    async def _state_db(self):
+        async with aiosqlite.connect(str(self.state_db_path)) as db:
+            await db.execute(_STATE_SCHEMA)
+            await db.commit()
+            yield db
 
     def _should_skip(self, path: Path, root: Path, ragignore: pathspec.PathSpec | None) -> bool:
         # Check skip dirs in any path component
@@ -153,7 +155,7 @@ class FileIndexer:
             for p in (paths or self.config.paths)
         ]
 
-        async with await self._state_db() as db:
+        async with self._state_db() as db:
             async with db.execute("SELECT path, file_hash FROM file_state") as cur:
                 old_state: dict[str, str] = {row[0]: row[1] async for row in cur}
 
