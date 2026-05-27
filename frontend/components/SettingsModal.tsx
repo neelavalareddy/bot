@@ -30,7 +30,10 @@ export default function SettingsModal({
     setTestResult(null);
     try {
       const clean = url.trim().replace(/\/+$/, '');
-      const resp = await fetch(`${clean}/v1/models`, { signal: AbortSignal.timeout(5000) });
+      const resp = await fetch(`${clean}/v1/models`, {
+        signal: AbortSignal.timeout(5000),
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+      });
       const data = await resp.json();
       const count = data.data?.length ?? 0;
       setTestResult(`✅ Connected — ${count} model(s) available`);

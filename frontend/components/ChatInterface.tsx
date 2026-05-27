@@ -65,7 +65,10 @@ export default function ChatInterface() {
 
   async function fetchModels(url: string, preferredModel: string) {
     try {
-      const resp = await fetch(`${url}/v1/models`, { signal: AbortSignal.timeout(5000) });
+      const resp = await fetch(`${url}/v1/models`, {
+        signal: AbortSignal.timeout(5000),
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+      });
       const data = await resp.json();
       const list: string[] = data.data?.map((m: { id: string }) => m.id) ?? [];
       setModels(list);
@@ -95,7 +98,7 @@ export default function ChatInterface() {
     try {
       const resp = await fetch(`${backendUrl}/v1/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
         body: JSON.stringify({
           model,
           messages: next.map(m => ({ role: m.role, content: m.content })),
