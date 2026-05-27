@@ -354,6 +354,9 @@ RISKY_TOOLS: frozenset[str] = frozenset(
      "install_package", "delete_skill"}
 )
 
+# Tools that stream progress chunks before yielding a final result
+STREAMING_TOOLS: frozenset[str] = frozenset({"index_documents"})
+
 
 # ---------------------------------------------------------------------------
 # Implementations
@@ -724,3 +727,86 @@ async def execute_tool(
                 f"Unknown tool: '{name}'. "
                 "If this is a new capability, use learn_skill to add it."
             )
+
+
+# ---------------------------------------------------------------------------
+# Streaming execution (yields progress chunks then a final markdown result)
+# ---------------------------------------------------------------------------
+
+import json as _json  # noqa: E402 — late import to avoid circular issues
+
+_STREAM_DONE = object()
+
+
+async def execute_tool_streaming(
+    name: str,
+    args: dict,
+    *,
+    config=None,
+    store=None,
+    ollama=None,
+    skill_registry=None,
+):
+    """Async generator — yields ``(chunk, is_final)`` tuples.
+
+    For regular tools: one ``(result, True)`` tuple.
+    For streaming tools (e.g. index_documents): zero or more ``(progress_markdown, False)``
+    followed by one ``(summary_markdown, True)``.
+    """
+    if name not in STREAMING_TOOLS:
+        result = await execute_tool(
+            name, args,
+            config=config, store=store, ollama=ollama,
+            skill_registry=skill_registry,
+        )
+        yield result, True
+        return
+
+    # --- Streaming path: index_documents ---
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _run() -> None:
+        try:
+            from offline_rag.indexer import FileIndexer
+
+            async def _progress(current: int, total: int, filename: str) -> None:
+                data = _json.dumps({
+                    "type": "progress",
+                    "current": current,
+                    "total": total,
+                    "label": filename,
+                })
+                await queue.put(f"\n```ui\n{data}\n```\n")
+
+            indexer = FileIndexer(config, store, ollama)
+            counts = await indexer.index_paths(
+                args.get("paths"), progress_callback=_progress
+            )
+            summary = _json.dumps({
+                "type": "summary",
+                "title": "Indexing complete",
+                "stats": [
+                    ["Indexed", str(counts.get("indexed", 0))],
+                    ["Skipped", str(counts.get("skipped", 0))],
+                    ["Deleted", str(counts.get("deleted", 0))],
+                    ["Errors", str(counts.get("errors", 0))],
+                    ["Total", str(counts.get("total_files", 0))],
+                ],
+            })
+            await queue.put((_STREAM_DONE, f"\n```ui\n{summary}\n```\n", None))
+        except Exception as exc:
+            await queue.put((_STREAM_DONE, None, exc))
+
+    asyncio.create_task(_run())
+
+    final = ""
+    while True:
+        item = await queue.get()
+        if isinstance(item, tuple) and item[0] is _STREAM_DONE:
+            if item[2] is not None:
+                raise item[2]
+            final = item[1]
+            break
+        yield item, False
+
+    yield final, True

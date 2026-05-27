@@ -275,14 +275,15 @@ async def list_models():
 # /index  — background reindex
 # ---------------------------------------------------------------------------
 
+class IndexRequest(BaseModel):
+    paths: list[str] | None = None
+
+
 @app.post("/index")
-async def trigger_index(
-    background_tasks: BackgroundTasks,
-    paths: list[str] | None = None,
-):
+async def trigger_index(background_tasks: BackgroundTasks, req: IndexRequest):
     job_id = uuid.uuid4().hex[:8]
     _index_jobs[job_id] = {"status": "running", "started_at": time.time()}
-    background_tasks.add_task(_run_index, job_id, paths)
+    background_tasks.add_task(_run_index, job_id, req.paths)
     return {"job_id": job_id, "status": "started"}
 
 

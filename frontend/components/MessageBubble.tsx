@@ -6,6 +6,19 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import { useState } from 'react';
 import type { Message } from './ChatInterface';
+import UiBlock from './UiBlock';
+
+// Keep only the last progress block so earlier ones don't pile up
+function dedupeProgress(content: string): string {
+  const re = /```ui\n(\{"type":"progress"[\s\S]*?)\n```/g;
+  const all = [...content.matchAll(re)];
+  if (all.length <= 1) return content;
+  let out = content;
+  for (let i = 0; i < all.length - 1; i++) {
+    out = out.replace(all[i][0], '');
+  }
+  return out;
+}
 
 interface Props {
   message: Message;
@@ -68,6 +81,9 @@ export default function MessageBubble({ message, streaming }: Props) {
                 code({ node, inline, className, children, ...props }: any) {
                   const match = /language-(\w+)/.exec(className ?? '');
                   if (!inline && match) {
+                    if (match[1] === 'ui') {
+                      return <UiBlock raw={String(children)} />;
+                    }
                     return (
                       <div className="relative group my-3 rounded-lg overflow-hidden">
                         <SyntaxHighlighter
@@ -100,7 +116,7 @@ export default function MessageBubble({ message, streaming }: Props) {
                 },
               }}
             >
-              {message.content}
+              {dedupeProgress(message.content)}
             </ReactMarkdown>
           </div>
         </div>

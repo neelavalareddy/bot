@@ -5,7 +5,7 @@ import json
 import logging
 from typing import AsyncIterator
 
-from offline_rag.agent.tools import TOOL_DEFS, RISKY_TOOLS, execute_tool
+from offline_rag.agent.tools import TOOL_DEFS, RISKY_TOOLS, STREAMING_TOOLS, execute_tool, execute_tool_streaming
 
 logger = logging.getLogger(__name__)
 
@@ -282,20 +282,30 @@ async def run_agent(
                 }
                 return
 
-            # Non-risky — execute immediately
+            # Non-risky — execute (with streaming progress for supported tools)
             yield f"\n\n{_tool_progress(tool_name, tool_args)}\n"
+            result = ""
             try:
-                result = await execute_tool(
+                async for chunk, is_final in execute_tool_streaming(
                     tool_name, tool_args,
                     config=config, store=store, ollama=ollama,
                     skill_registry=skill_registry,
-                )
+                ):
+                    if is_final:
+                        result = chunk
+                        if chunk:
+                            if tool_name in STREAMING_TOOLS:
+                                # Already formatted markdown (ui blocks etc.)
+                                yield f"\n{chunk}\n"
+                            else:
+                                display = chunk if len(chunk) <= 4000 else chunk[:4000] + "\n...[truncated]"
+                                yield f"\n```\n{display}\n```\n"
+                    else:
+                        yield chunk  # stream progress to client
             except Exception as exc:
                 result = f"Error executing {tool_name}: {exc}"
                 logger.exception("Tool %s failed", tool_name)
-
-            display = result if len(result) <= 4000 else result[:4000] + "\n...[truncated]"
-            yield f"\n```\n{display}\n```\n"
+                yield f"\n```\n{result}\n```\n"
 
             history.append({"role": "tool", "content": result, "name": tool_name})
             content_acc = ""

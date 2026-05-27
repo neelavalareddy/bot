@@ -143,7 +143,11 @@ class FileIndexer:
             self.store.delete_by_file_hash(old_hash)
         self.store.add_chunks(chunks_list)
 
-    async def index_paths(self, paths: list[str] | None = None) -> dict:
+    async def index_paths(
+        self,
+        paths: list[str] | None = None,
+        progress_callback=None,
+    ) -> dict:
         target_roots = [
             Path(p).expanduser()
             for p in (paths or self.config.paths)
@@ -160,14 +164,19 @@ class FileIndexer:
                 elif root.is_dir():
                     all_files.extend(self._collect(root))
 
+            total_files = len(all_files)
+            _report_every = max(1, total_files // 20)
             seen: set[str] = set()
             counts = {"indexed": 0, "skipped": 0, "deleted": 0, "errors": 0}
 
             pbar = tqdm(all_files, desc="Indexing", unit="file", dynamic_ncols=True)
-            for file_path in pbar:
+            for i, file_path in enumerate(pbar):
                 path_str = str(file_path)
                 seen.add(path_str)
                 pbar.set_postfix(f=file_path.name[:35])
+                _should_report = progress_callback is not None and (
+                    i % _report_every == 0 or i == total_files - 1
+                )
 
                 try:
                     mtime = file_path.stat().st_mtime
@@ -175,6 +184,8 @@ class FileIndexer:
 
                     if path_str in old_state and old_state[path_str] == current_hash:
                         counts["skipped"] += 1
+                        if _should_report:
+                            await progress_callback(i + 1, total_files, file_path.name)
                         continue
 
                     text, meta = parse_file(file_path, self.config)
@@ -189,10 +200,14 @@ class FileIndexer:
                         except Exception as e:
                             logger.warning(f"Vision caption failed for {file_path}: {e}")
                             counts["errors"] += 1
+                            if _should_report:
+                                await progress_callback(i + 1, total_files, file_path.name)
                             continue
 
                     if not text or not text.strip():
                         counts["skipped"] += 1
+                        if _should_report:
+                            await progress_callback(i + 1, total_files, file_path.name)
                         continue
 
                     # Determine relative path
@@ -229,6 +244,9 @@ class FileIndexer:
                 except Exception as e:
                     logger.error(f"Failed to index {file_path}: {e}", exc_info=True)
                     counts["errors"] += 1
+
+                if _should_report:
+                    await progress_callback(i + 1, total_files, file_path.name)
 
             # Purge deleted files
             for old_path, old_hash in old_state.items():
