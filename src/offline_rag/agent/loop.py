@@ -28,17 +28,23 @@ machine via Ollama — no cloud, no subscription.
 - make_slides     — Create a PowerPoint (.pptx) or PDF presentation
 - rag_search      — Search the user's personal indexed documents
 - index_documents — Add documents to the searchable index
+- learn_skill     — Research and save a new Python skill you can reuse forever
+- list_skills     — Show all previously learned skills
+- delete_skill    — Remove a learned skill permanently
 
 ## How to behave
 1. Be decisive. Make reasonable assumptions rather than asking clarifying questions.
-2. If you don't know how to do something, use web_search + web_fetch to learn, then do it.
+2. If you don't know how to do something, use web_search + web_fetch to learn, \
+   then write and save a skill with learn_skill so you can do it next time too.
 3. Work step by step. Use tools to gather information before acting.
 4. The system automatically asks the user before executing run_python, run_shell, \
-write_file, move_file, or delete_file — you do not need to warn the user yourself.
+write_file, move_file, delete_file, install_package, or delete_skill — you do not \
+need to warn the user yourself.
 5. Show brief reasoning before each tool call so the user can follow along.
 6. When answering from web results, cite the source URL.
 7. If a tool fails, adapt and try a different approach.
 8. Use rag_search first when the user asks about their own documents.
+9. When you learn a new skill, call it immediately to complete the user's request.
 
 ## Environment
 - Windows 11, PowerShell 5.1 available
@@ -86,6 +92,12 @@ def _tool_progress(name: str, args: dict) -> str:
         case "index_documents":
             paths = ", ".join(args.get("paths", []))
             return f'📥 Indexing: {paths}'
+        case "learn_skill":
+            return f'🧠 Learning skill: `{args.get("name", "")}`'
+        case "list_skills":
+            return '📋 Listing learned skills…'
+        case "delete_skill":
+            return f'🗑️ Deleting skill: `{args.get("name", "")}`'
         case _:
             return f'⚙️ Running: `{name}`'
 
@@ -142,6 +154,12 @@ def _confirmation_prompt(name: str, args: dict) -> str:
                 f"`pip install {args.get('package', '')}`\n\n"
                 f"Reply **yes** to install or **no** to cancel."
             )
+        case "delete_skill":
+            return (
+                f"⚠️ **Permanently delete learned skill?**\n\n"
+                f"Skill: `{args.get('name', '')}`\n\n"
+                f"Reply **yes** to delete or **no** to cancel."
+            )
         case _:
             return (
                 f"⚠️ **Confirm:** `{name}({json.dumps(args, ensure_ascii=False)})`\n\n"
@@ -155,6 +173,7 @@ async def run_agent(
     config,
     ollama,
     store,
+    skill_registry=None,
 ) -> AsyncIterator[str]:
     """ReAct agent loop. Yields text chunks for streaming to the client."""
 
@@ -183,6 +202,7 @@ async def run_agent(
                         config=config,
                         store=store,
                         ollama=ollama,
+                        skill_registry=skill_registry,
                     )
                 except Exception as exc:
                     result = f"Error: {exc}"
@@ -216,7 +236,10 @@ async def run_agent(
         content_acc = ""
         final_tool_calls: list[dict] = []
 
-        async for delta, tc_list in ollama.chat_stream_with_tools(model, history, TOOL_DEFS):
+        # Rebuild tool list each step so newly learned skills are available immediately
+        all_tools = TOOL_DEFS + (skill_registry.tool_defs() if skill_registry else [])
+
+        async for delta, tc_list in ollama.chat_stream_with_tools(model, history, all_tools):
             if tc_list is None:
                 # Streaming text delta
                 content_acc += delta
@@ -265,6 +288,7 @@ async def run_agent(
                 result = await execute_tool(
                     tool_name, tool_args,
                     config=config, store=store, ollama=ollama,
+                    skill_registry=skill_registry,
                 )
             except Exception as exc:
                 result = f"Error executing {tool_name}: {exc}"

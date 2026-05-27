@@ -270,6 +270,67 @@ TOOL_DEFS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "learn_skill",
+            "description": (
+                "Write and permanently save a new Python skill. "
+                "The skill becomes a new tool instantly and persists across all future sessions. "
+                "Always use web_search + web_fetch first to learn the correct implementation. "
+                "The code must define a function named exactly `name`."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Snake_case function name, e.g. 'generate_qr_code'. Must match the function defined in code.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "One-sentence description shown in the tool list.",
+                    },
+                    "parameters": {
+                        "type": "object",
+                        "description": "JSON Schema 'object' describing the function's parameters.",
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": (
+                            "Complete, self-contained Python source. "
+                            "Must define a function named `name`. "
+                            "May import any installed package. "
+                            "Must return a string (or None for no output)."
+                        ),
+                    },
+                },
+                "required": ["name", "description", "parameters", "code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_skills",
+            "description": "List all previously learned skills and their descriptions.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_skill",
+            "description": "Permanently delete a learned skill. Requires user confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Exact skill name to delete"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "index_documents",
             "description": "Index new documents so they become searchable via rag_search.",
             "parameters": {
@@ -289,7 +350,8 @@ TOOL_DEFS: list[dict] = [
 
 # Tools that require user confirmation before executing
 RISKY_TOOLS: frozenset[str] = frozenset(
-    {"run_python", "run_shell", "write_file", "move_file", "delete_file", "install_package"}
+    {"run_python", "run_shell", "write_file", "move_file", "delete_file",
+     "install_package", "delete_skill"}
 )
 
 
@@ -609,6 +671,7 @@ async def execute_tool(
     config=None,
     store=None,
     ollama=None,
+    skill_registry=None,
 ) -> str:
     match name:
         case "web_search":
@@ -637,5 +700,27 @@ async def execute_tool(
             return await install_package(**args)
         case "index_documents":
             return await index_documents(config=config, store=store, ollama=ollama, **args)
+        case "learn_skill":
+            if skill_registry is None:
+                return "Skill registry not available."
+            return skill_registry.register(
+                name=args["name"],
+                description=args["description"],
+                parameters=args["parameters"],
+                code=args["code"],
+            )
+        case "list_skills":
+            if skill_registry is None:
+                return "Skill registry not available."
+            return skill_registry.list_all()
+        case "delete_skill":
+            if skill_registry is None:
+                return "Skill registry not available."
+            return skill_registry.delete(args["name"])
         case _:
-            return f"Unknown tool: {name}"
+            if skill_registry is not None and name in skill_registry._skills:
+                return await skill_registry.execute(name, args)
+            return (
+                f"Unknown tool: '{name}'. "
+                "If this is a new capability, use learn_skill to add it."
+            )

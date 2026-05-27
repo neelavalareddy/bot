@@ -30,6 +30,9 @@ A local AI agent that can do anything you ask — search the web, run code, mana
 | `make_slides` | Create `.pptx` or `.pdf` presentations |
 | `rag_search` | Search your indexed local documents |
 | `index_documents` | Add documents to the searchable index |
+| `learn_skill` | Research and save a new Python skill permanently |
+| `list_skills` | Show all previously learned skills |
+| `delete_skill` | Remove a learned skill |
 
 ---
 

@@ -24,6 +24,7 @@ def _setup_logging(verbose: bool = False) -> None:
 
 
 def _runtime():
+    from offline_rag.agent.skills import SkillRegistry
     from offline_rag.config import load_config
     from offline_rag.ollama_client import OllamaClient
     from offline_rag.store import VectorStore
@@ -31,7 +32,8 @@ def _runtime():
     config = load_config()
     ollama = OllamaClient(config.ollama_base_url)
     store = VectorStore(f"{config.data_dir}/lancedb")
-    return config, ollama, store
+    skill_registry = SkillRegistry(Path(config.data_dir) / "skills")
+    return config, ollama, store, skill_registry
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +81,7 @@ def index(paths: tuple[str, ...]) -> None:
     """Index files. Pass paths or use paths from config.yaml."""
 
     async def _run() -> dict:
-        config, ollama, store = _runtime()
+        config, ollama, store, _ = _runtime()
         from offline_rag.indexer import FileIndexer
         indexer = FileIndexer(config, store, ollama)
         try:
@@ -133,7 +135,7 @@ def chat(model: str | None, fresh: bool) -> None:
     from offline_rag.agent import run_agent
 
     async def _run() -> None:
-        config, ollama, store = _runtime()
+        config, ollama, store, skill_registry = _runtime()
         chat_model = model or config.default_chat_model
         history_file = Path(config.data_dir) / "chat_history.json"
 
@@ -152,7 +154,7 @@ def chat(model: str | None, fresh: bool) -> None:
         console.print(
             f"\n[bold]Universal Bot[/bold]  "
             f"model=[cyan]{chat_model}[/cyan]  "
-            f"[dim]tools: web · code · shell · files · slides · docs[/dim]"
+            f"[dim]tools: web · code · shell · files · slides · docs · skills[/dim]"
         )
         console.print(
             "[dim]Enter to send  ·  Shift+Enter for newline  ·  "
@@ -183,7 +185,10 @@ def chat(model: str | None, fresh: bool) -> None:
 
                 parts: list[str] = []
                 try:
-                    async for chunk in run_agent(messages, chat_model, config, ollama, store):
+                    async for chunk in run_agent(
+                        messages, chat_model, config, ollama, store,
+                        skill_registry=skill_registry,
+                    ):
                         print(chunk, end="", flush=True)
                         parts.append(chunk)
                 except Exception as exc:
@@ -247,7 +252,7 @@ def watch(paths: tuple[str, ...]) -> None:
         from offline_rag.indexer import FileIndexer
         from offline_rag.watcher import start_watching
 
-        config, ollama, store = _runtime()
+        config, ollama, store, _ = _runtime()
         indexer = FileIndexer(config, store, ollama)
 
         watch_roots = (

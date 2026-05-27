@@ -13,7 +13,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
+from pathlib import Path
+
 from offline_rag.agent import run_agent
+from offline_rag.agent.skills import SkillRegistry
 from offline_rag.config import Config, load_config
 from offline_rag.indexer import FileIndexer
 from offline_rag.ollama_client import OllamaClient
@@ -58,7 +61,8 @@ async def lifespan(app: FastAPI):
     config = load_config()
     ollama = OllamaClient(config.ollama_base_url)
     store = VectorStore(f"{config.data_dir}/lancedb")
-    _state.update(config=config, ollama=ollama, store=store)
+    skill_registry = SkillRegistry(Path(config.data_dir) / "skills")
+    _state.update(config=config, ollama=ollama, store=store, skill_registry=skill_registry)
     yield
     await ollama.aclose()
 
@@ -95,10 +99,12 @@ def _make_response(model: str, content: str) -> dict:
     }
 
 
-async def _agent_gen_safe(messages, model, config, ollama, store):
+async def _agent_gen_safe(messages, model, config, ollama, store, skill_registry=None):
     """Wraps run_agent to catch exceptions and yield them as visible error messages."""
     try:
-        async for chunk in run_agent(messages, model, config, ollama, store):
+        async for chunk in run_agent(
+            messages, model, config, ollama, store, skill_registry=skill_registry
+        ):
             yield chunk
     except Exception as exc:
         logger.exception("Agent error during streaming")
@@ -183,7 +189,8 @@ async def chat_completions(
     # Agent path (default)
     # ------------------------------------------------------------------
     if agent:
-        agent_gen = _agent_gen_safe(messages, model, config, ollama, store)
+        skill_registry: SkillRegistry = _state["skill_registry"]
+        agent_gen = _agent_gen_safe(messages, model, config, ollama, store, skill_registry)
 
         if request.stream:
             return StreamingResponse(
@@ -305,8 +312,6 @@ async def index_status(job_id: str):
 async def status():
     config: Config = _state["config"]
     store: VectorStore = _state["store"]
-    from pathlib import Path
-
     stats = store.get_stats()
     db_path = Path(config.data_dir) / "lancedb"
     disk_bytes = (
@@ -315,6 +320,7 @@ async def status():
         else 0
     )
     state_db = Path(config.data_dir) / "state.db"
+
     disk_bytes += state_db.stat().st_size if state_db.exists() else 0
 
     return {
