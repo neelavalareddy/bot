@@ -15,6 +15,9 @@ const STORAGE_KEY_URL = 'bot_backend_url';
 const STORAGE_KEY_MODEL = 'bot_selected_model';
 const STORAGE_KEY_HISTORY = 'bot_chat_history';
 
+// Baked in at build time — set NEXT_PUBLIC_BACKEND_URL in Vercel env vars
+const DEFAULT_BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? '';
+
 function isConfirmationPrompt(text: string) {
   return text.includes('Reply **yes**') || (text.includes('⚠️ **') && text.includes('cancel'));
 }
@@ -36,7 +39,7 @@ export default function ChatInterface() {
 
   // Load persisted state on mount
   useEffect(() => {
-    const url = localStorage.getItem(STORAGE_KEY_URL) ?? '';
+    const url = localStorage.getItem(STORAGE_KEY_URL) ?? DEFAULT_BACKEND_URL;
     const savedModel = localStorage.getItem(STORAGE_KEY_MODEL) ?? '';
     const savedHistory = localStorage.getItem(STORAGE_KEY_HISTORY);
 
