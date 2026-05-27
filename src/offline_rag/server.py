@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator, Literal
 
 from fastapi import BackgroundTasks, FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
@@ -64,6 +65,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Universal Bot", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -84,6 +93,16 @@ def _make_response(model: str, content: str) -> dict:
         ],
         "usage": {"prompt_tokens": -1, "completion_tokens": -1, "total_tokens": -1},
     }
+
+
+async def _agent_gen_safe(messages, model, config, ollama, store):
+    """Wraps run_agent to catch exceptions and yield them as visible error messages."""
+    try:
+        async for chunk in run_agent(messages, model, config, ollama, store):
+            yield chunk
+    except Exception as exc:
+        logger.exception("Agent error during streaming")
+        yield f"\n\n❌ **Agent error:** {exc}"
 
 
 async def _sse(
@@ -164,7 +183,7 @@ async def chat_completions(
     # Agent path (default)
     # ------------------------------------------------------------------
     if agent:
-        agent_gen = run_agent(messages, model, config, ollama, store)
+        agent_gen = _agent_gen_safe(messages, model, config, ollama, store)
 
         if request.stream:
             return StreamingResponse(

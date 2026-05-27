@@ -81,6 +81,8 @@ def _tool_progress(name: str, args: dict) -> str:
             return f'📊 Creating presentation: *{args.get("title", "")}*'
         case "rag_search":
             return f'🔎 Searching your documents: *{args.get("query", "")}*'
+        case "install_package":
+            return f'📦 Installing: `{args.get("package", "")}`'
         case "index_documents":
             paths = ", ".join(args.get("paths", []))
             return f'📥 Indexing: {paths}'
@@ -133,6 +135,12 @@ def _confirmation_prompt(name: str, args: dict) -> str:
                 f"⚠️ **Delete {target}? This cannot be undone.**\n\n"
                 f"`{args.get('path', '')}`\n\n"
                 f"Reply **yes** to delete or **no** to cancel."
+            )
+        case "install_package":
+            return (
+                f"⚠️ **Install Python package?**\n\n"
+                f"`pip install {args.get('package', '')}`\n\n"
+                f"Reply **yes** to install or **no** to cancel."
             )
         case _:
             return (

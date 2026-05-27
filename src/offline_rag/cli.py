@@ -1,28 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sys
 from pathlib import Path
 
 import click
 from rich.console import Console
-from rich.text import Text
 
 console = Console()
-err_console = Console(stderr=True)
 
 
 def _setup_logging(verbose: bool = False) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
+    level = logging.DEBUG if verbose else logging.WARNING
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    # Quiet noisy third-party loggers
-    for noisy in ("httpx", "httpcore", "watchdog", "lancedb", "urllib3"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    for noisy in ("httpx", "httpcore", "watchdog", "lancedb", "urllib3", "asyncio"):
+        logging.getLogger(noisy).setLevel(logging.ERROR)
 
 
 def _runtime():
@@ -43,7 +41,7 @@ def _runtime():
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, default=False)
 def cli(verbose: bool) -> None:
-    """Offline RAG — local document intelligence powered by Ollama."""
+    """Universal Bot — local AI agent with tools, powered by Ollama."""
     _setup_logging(verbose)
 
 
@@ -65,10 +63,10 @@ def init() -> None:
 
     Path("data/lancedb").mkdir(parents=True, exist_ok=True)
     console.print("[green]✓[/green] Created data/ directories")
-
     console.print("\n[bold]Next steps:[/bold]")
-    console.print("  [cyan]rag index ~/Documents[/cyan]")
-    console.print("  [cyan]rag serve[/cyan]")
+    console.print("  [cyan]rag index ~/Documents[/cyan]   — index your files")
+    console.print("  [cyan]rag serve[/cyan]               — start the API server")
+    console.print("  [cyan]rag chat[/cyan]                — chat in the terminal")
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +76,7 @@ def init() -> None:
 @cli.command()
 @click.argument("paths", nargs=-1)
 def index(paths: tuple[str, ...]) -> None:
-    """Index files. Pass paths or use config.yaml paths."""
+    """Index files. Pass paths or use paths from config.yaml."""
 
     async def _run() -> dict:
         config, ollama, store = _runtime()
@@ -106,7 +104,6 @@ def stats() -> None:
     """Show index statistics."""
     from offline_rag.config import load_config
     from offline_rag.store import VectorStore
-    from pathlib import Path
 
     config = load_config()
     store = VectorStore(f"{config.data_dir}/lancedb")
@@ -125,73 +122,86 @@ def stats() -> None:
 
 
 # ---------------------------------------------------------------------------
-# chat
+# chat  — full agent REPL with persistent history
 # ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option("--model", "-m", default=None, help="Ollama model name")
-@click.option("--no-rag", is_flag=True, default=False, help="Disable retrieval")
-def chat(model: str | None, no_rag: bool) -> None:
-    """Interactive REPL with streaming responses and source citations."""
+@click.option("--model", "-m", default=None, help="Ollama model (overrides config)")
+@click.option("--fresh", is_flag=True, help="Ignore saved history and start a new conversation")
+def chat(model: str | None, fresh: bool) -> None:
+    """Interactive agent chat — web search, code, files, slides, and more."""
+    from offline_rag.agent import run_agent
 
     async def _run() -> None:
-        from offline_rag.retrieval import SYSTEM_PROMPT, retrieve
-
         config, ollama, store = _runtime()
         chat_model = model or config.default_chat_model
+        history_file = Path(config.data_dir) / "chat_history.json"
 
-        console.print(f"[bold]Offline RAG Chat[/bold]  model=[cyan]{chat_model}[/cyan]")
+        messages: list[dict] = []
+        if not fresh and history_file.exists():
+            try:
+                messages = json.loads(history_file.read_text(encoding="utf-8"))
+                turns = sum(1 for m in messages if m.get("role") == "user")
+                console.print(
+                    f"[dim]Loaded {turns} previous turn(s). "
+                    f"Type [bold]/fresh[/bold] to start over.[/dim]"
+                )
+            except Exception:
+                messages = []
+
         console.print(
-            "Commands: [dim]exit[/dim] quit  |  [dim]?rag=off[/dim] disable retrieval for one turn\n"
+            f"\n[bold]Universal Bot[/bold]  "
+            f"model=[cyan]{chat_model}[/cyan]  "
+            f"[dim]tools: web · code · shell · files · slides · docs[/dim]"
         )
-
-        history: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        console.print(
+            "[dim]Enter to send  ·  Shift+Enter for newline  ·  "
+            "Ctrl+C to quit  ·  /fresh to clear history[/dim]\n"
+        )
 
         try:
             while True:
                 try:
                     user_input = console.input("[bold cyan]You:[/bold cyan] ").strip()
                 except (EOFError, KeyboardInterrupt):
+                    console.print("\n[dim]Goodbye.[/dim]")
                     break
 
                 if not user_input:
                     continue
                 if user_input.lower() in ("exit", "quit", "q"):
                     break
+                if user_input.lower() == "/fresh":
+                    messages = []
+                    history_file.unlink(missing_ok=True)
+                    console.print("[dim]Started fresh conversation.[/dim]\n")
+                    continue
 
-                turn_rag = not no_rag and "?rag=off" not in user_input
-                clean = user_input.replace("?rag=off", "").strip()
+                messages.append({"role": "user", "content": user_input})
+                console.print()
+                console.print("[bold green]Bot:[/bold green] ", end="")
 
-                if turn_rag:
-                    try:
-                        result = await retrieve(clean, config, store, ollama)
-                        if result.sources:
-                            console.print("\n[dim]Sources:[/dim]")
-                            for src in result.sources:
-                                console.print(f"[dim]  • {src}[/dim]")
-                            console.print()
-
-                        if result.context_text:
-                            augmented = (
-                                f"Context:\n\n{result.context_text}\n\n---\n\nQuestion: {clean}"
-                            )
-                            history.append({"role": "user", "content": augmented})
-                        else:
-                            history.append({"role": "user", "content": clean})
-                    except Exception as e:
-                        console.print(f"[yellow]Retrieval warning: {e}[/yellow]")
-                        history.append({"role": "user", "content": clean})
-                else:
-                    history.append({"role": "user", "content": clean})
-
-                console.print("[bold green]Assistant:[/bold green] ", end="")
                 parts: list[str] = []
-                async for delta in ollama.chat_stream(chat_model, history):
-                    print(delta, end="", flush=True)
-                    parts.append(delta)
-                print()
+                try:
+                    async for chunk in run_agent(messages, chat_model, config, ollama, store):
+                        print(chunk, end="", flush=True)
+                        parts.append(chunk)
+                except Exception as exc:
+                    err = f"\n❌ Error: {exc}"
+                    print(err, end="", flush=True)
+                    parts.append(err)
 
-                history.append({"role": "assistant", "content": "".join(parts)})
+                print("\n")
+                response = "".join(parts)
+                messages.append({"role": "assistant", "content": response})
+
+                # Persist conversation to disk
+                history_file.parent.mkdir(parents=True, exist_ok=True)
+                history_file.write_text(
+                    json.dumps(messages, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
         finally:
             await ollama.aclose()
 
@@ -206,7 +216,7 @@ def chat(model: str | None, no_rag: bool) -> None:
 @click.option("--host", default=None, help="Override config server_host")
 @click.option("--port", "-p", default=None, type=int, help="Override config server_port")
 def serve(host: str | None, port: int | None) -> None:
-    """Start the OpenAI-compatible RAG API server."""
+    """Start the Universal Bot API server (OpenAI-compatible)."""
     import uvicorn
     from offline_rag.config import load_config
     from offline_rag.server import app
@@ -214,8 +224,13 @@ def serve(host: str | None, port: int | None) -> None:
     config = load_config()
     h = host or config.server_host
     p = port or config.server_port
-    console.print(f"[bold]Starting RAG server[/bold] on [cyan]http://{h}:{p}[/cyan]")
-    console.print(f"  OpenAI API base: [cyan]http://{h}:{p}/v1[/cyan]")
+    console.print(f"[bold]Universal Bot server[/bold] → [cyan]http://{h}:{p}[/cyan]")
+    console.print(f"  API base : [cyan]http://{h}:{p}/v1[/cyan]")
+    console.print(f"  Docs     : [cyan]http://{h}:{p}/docs[/cyan]")
+    console.print(
+        "\n  Expose to the internet: [dim]ngrok http {p}[/dim] "
+        "then paste the URL into the web UI settings.\n"
+    )
     uvicorn.run(app, host=h, port=p, log_level="warning")
 
 
@@ -226,7 +241,7 @@ def serve(host: str | None, port: int | None) -> None:
 @cli.command()
 @click.argument("paths", nargs=-1)
 def watch(paths: tuple[str, ...]) -> None:
-    """Index then watch for file changes (incremental re-index on save)."""
+    """Index then watch paths for file changes (incremental re-index on save)."""
 
     async def _run() -> None:
         from offline_rag.indexer import FileIndexer
@@ -243,7 +258,9 @@ def watch(paths: tuple[str, ...]) -> None:
 
         console.print("[bold]Initial index...[/bold]")
         result = await indexer.index_paths(watch_roots)
-        console.print(f"Indexed {result['indexed']} files. Watching {len(watch_roots)} path(s)...")
+        console.print(
+            f"Indexed {result['indexed']} files. Watching {len(watch_roots)} path(s)..."
+        )
         console.print("[dim]Press Ctrl+C to stop.[/dim]")
 
         try:

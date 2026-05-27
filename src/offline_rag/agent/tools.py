@@ -250,6 +250,26 @@ TOOL_DEFS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "install_package",
+            "description": (
+                "Install a Python package via pip. "
+                "The user will be asked to confirm before installing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "package": {
+                        "type": "string",
+                        "description": "Package name, e.g. 'requests' or 'pandas==2.0'",
+                    },
+                },
+                "required": ["package"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "index_documents",
             "description": "Index new documents so they become searchable via rag_search.",
             "parameters": {
@@ -269,7 +289,7 @@ TOOL_DEFS: list[dict] = [
 
 # Tools that require user confirmation before executing
 RISKY_TOOLS: frozenset[str] = frozenset(
-    {"run_python", "run_shell", "write_file", "move_file", "delete_file"}
+    {"run_python", "run_shell", "write_file", "move_file", "delete_file", "install_package"}
 )
 
 
@@ -536,6 +556,26 @@ def make_slides(
     return f"Saved {format.upper()} ({len(slides)} content slides, {kb} KB) → {out}"
 
 
+async def install_package(package: str) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m", "pip", "install", package, "--quiet",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return "Timeout: pip install took more than 120 seconds."
+
+    out = stdout.decode(errors="replace")
+    err = stderr.decode(errors="replace")
+    if proc.returncode == 0:
+        return f"Successfully installed {package}.\n{out}".strip()
+    return f"Failed to install {package} (exit {proc.returncode}).\n{err}".strip()
+
+
 async def rag_search(query: str, *, config, store, ollama) -> str:
     from offline_rag.retrieval import retrieve
 
@@ -593,6 +633,8 @@ async def execute_tool(
             return make_slides(**args)
         case "rag_search":
             return await rag_search(config=config, store=store, ollama=ollama, **args)
+        case "install_package":
+            return await install_package(**args)
         case "index_documents":
             return await index_documents(config=config, store=store, ollama=ollama, **args)
         case _:
