@@ -10,8 +10,9 @@ from typing import AsyncIterator, Literal
 
 from fastapi import BackgroundTasks, FastAPI, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
+from offline_rag.agent import run_agent
 from offline_rag.config import Config, load_config
 from offline_rag.indexer import FileIndexer
 from offline_rag.ollama_client import OllamaClient
@@ -26,8 +27,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class ChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant"]
-    content: str
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str = ""
+
+    model_config = ConfigDict(extra="ignore")
 
 
 class ChatCompletionRequest(BaseModel):
@@ -37,6 +40,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     top_p: float | None = None
+
+    model_config = ConfigDict(extra="ignore")
 
 
 # ---------------------------------------------------------------------------
@@ -57,67 +62,14 @@ async def lifespan(app: FastAPI):
     await ollama.aclose()
 
 
-app = FastAPI(title="Offline RAG", lifespan=lifespan)
+app = FastAPI(title="Universal Bot", lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
-# /v1/chat/completions
+# Helpers
 # ---------------------------------------------------------------------------
 
-@app.post("/v1/chat/completions")
-async def chat_completions(
-    request: ChatCompletionRequest,
-    rag: bool = Query(default=True, description="Set ?rag=false to bypass retrieval"),
-):
-    config: Config = _state["config"]
-    ollama: OllamaClient = _state["ollama"]
-    store: VectorStore = _state["store"]
-
-    messages = [m.model_dump() for m in request.messages]
-
-    # Find last user message index
-    last_user_idx: int | None = None
-    for i in range(len(messages) - 1, -1, -1):
-        if messages[i]["role"] == "user":
-            last_user_idx = i
-            break
-
-    if rag and last_user_idx is not None:
-        user_query = messages[last_user_idx]["content"]
-        try:
-            result = await retrieve(user_query, config, store, ollama)
-            if result.context_text:
-                augmented = (
-                    f"Context from your documents:\n\n{result.context_text}"
-                    f"\n\n---\n\nQuestion: {user_query}"
-                )
-                messages[last_user_idx] = {"role": "user", "content": augmented}
-                if not messages or messages[0]["role"] != "system":
-                    messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
-        except Exception as e:
-            logger.warning(f"Retrieval failed, falling back to plain LLM: {e}")
-
-    options: dict = {}
-    if request.temperature is not None:
-        options["temperature"] = request.temperature
-    if request.top_p is not None:
-        options["top_p"] = request.top_p
-
-    model = request.model
-
-    if request.stream:
-        return StreamingResponse(
-            _stream(model, messages, options),
-            media_type="text/event-stream",
-            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
-        )
-
-    # Non-streaming: collect all chunks
-    content_parts: list[str] = []
-    async for delta in ollama.chat_stream(model, messages, options):
-        content_parts.append(delta)
-    content = "".join(content_parts)
-
+def _make_response(model: str, content: str) -> dict:
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
         "object": "chat.completion",
@@ -134,9 +86,38 @@ async def chat_completions(
     }
 
 
-async def _stream(
+async def _sse(
+    source: AsyncIterator[str],
+    model: str,
+) -> AsyncIterator[bytes]:
+    req_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    created = int(time.time())
+
+    async for chunk in source:
+        data = {
+            "id": req_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
+        }
+        yield f"data: {json.dumps(data)}\n\n".encode()
+
+    stop = {
+        "id": req_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+    }
+    yield f"data: {json.dumps(stop)}\n\n".encode()
+    yield b"data: [DONE]\n\n"
+
+
+async def _legacy_stream(
     model: str, messages: list[dict], options: dict
 ) -> AsyncIterator[bytes]:
+    """Original plain-ollama streaming path (no agent, no tools)."""
     ollama: OllamaClient = _state["ollama"]
     req_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
@@ -163,7 +144,88 @@ async def _stream(
 
 
 # ---------------------------------------------------------------------------
-# /v1/models  — proxy Ollama's tag list
+# /v1/chat/completions
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/chat/completions")
+async def chat_completions(
+    request: ChatCompletionRequest,
+    agent: bool = Query(default=True, description="Route through the universal agent (default true). Set ?agent=false for plain RAG."),
+    rag: bool = Query(default=True, description="Apply RAG retrieval when agent=false."),
+):
+    config: Config = _state["config"]
+    ollama: OllamaClient = _state["ollama"]
+    store: VectorStore = _state["store"]
+
+    messages = [m.model_dump() for m in request.messages]
+    model = request.model
+
+    # ------------------------------------------------------------------
+    # Agent path (default)
+    # ------------------------------------------------------------------
+    if agent:
+        agent_gen = run_agent(messages, model, config, ollama, store)
+
+        if request.stream:
+            return StreamingResponse(
+                _sse(agent_gen, model),
+                media_type="text/event-stream",
+                headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+            )
+
+        parts: list[str] = []
+        async for chunk in agent_gen:
+            parts.append(chunk)
+        return _make_response(model, "".join(parts))
+
+    # ------------------------------------------------------------------
+    # Legacy RAG-only path (?agent=false)
+    # ------------------------------------------------------------------
+    if rag:
+        last_user_idx: int | None = None
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i]["role"] == "user":
+                last_user_idx = i
+                break
+
+        if last_user_idx is not None:
+            user_query = messages[last_user_idx]["content"]
+            try:
+                result = await retrieve(user_query, config, store, ollama)
+                if result.context_text:
+                    messages[last_user_idx] = {
+                        "role": "user",
+                        "content": (
+                            f"Context from your documents:\n\n{result.context_text}"
+                            f"\n\n---\n\nQuestion: {user_query}"
+                        ),
+                    }
+                    if not messages or messages[0]["role"] != "system":
+                        messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+            except Exception as e:
+                logger.warning(f"Retrieval failed, falling back to plain LLM: {e}")
+
+    options: dict = {}
+    if request.temperature is not None:
+        options["temperature"] = request.temperature
+    if request.top_p is not None:
+        options["top_p"] = request.top_p
+
+    if request.stream:
+        return StreamingResponse(
+            _legacy_stream(model, messages, options),
+            media_type="text/event-stream",
+            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        )
+
+    content_parts: list[str] = []
+    async for delta in ollama.chat_stream(model, messages, options):
+        content_parts.append(delta)
+    return _make_response(model, "".join(content_parts))
+
+
+# ---------------------------------------------------------------------------
+# /v1/models
 # ---------------------------------------------------------------------------
 
 @app.get("/v1/models")
@@ -177,19 +239,14 @@ async def list_models():
     return {
         "object": "list",
         "data": [
-            {
-                "id": m["name"],
-                "object": "model",
-                "created": 0,
-                "owned_by": "ollama",
-            }
+            {"id": m["name"], "object": "model", "created": 0, "owned_by": "ollama"}
             for m in models
         ],
     }
 
 
 # ---------------------------------------------------------------------------
-# /index  — trigger background reindex
+# /index  — background reindex
 # ---------------------------------------------------------------------------
 
 @app.post("/index")

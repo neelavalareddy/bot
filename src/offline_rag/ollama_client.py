@@ -61,6 +61,51 @@ class OllamaClient:
                 if content:
                     yield content
 
+    async def chat_stream_with_tools(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict],
+        options: dict | None = None,
+    ):
+        """Stream chat with tool-call support.
+
+        Yields ``(text_delta, None)`` for each streaming token, then
+        ``(final_content, tool_calls)`` once when the response is complete.
+        ``tool_calls`` is an empty list when the model produced only text.
+        """
+        payload: dict = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "stream": True,
+        }
+        if options:
+            payload["options"] = options
+
+        async with self._client.stream(
+            "POST", f"{self.base_url}/api/chat", json=payload
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                msg = data.get("message", {})
+                content = msg.get("content", "")
+                tool_calls = msg.get("tool_calls")
+                done = data.get("done", False)
+
+                if done:
+                    yield (content, tool_calls if tool_calls is not None else [])
+                    return
+                elif content:
+                    yield (content, None)
+
     async def chat(
         self,
         model: str,

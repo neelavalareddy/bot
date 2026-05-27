@@ -22,6 +22,10 @@ dependencies = [
     "aiosqlite>=0.20",
     "structlog>=24",
     "pathspec>=0.12",
+    "duckduckgo-search>=6",
+    "beautifulsoup4>=4.12",
+    "python-pptx>=1.0",
+    "fpdf2>=2.7",
 ]
 
 [project.optional-dependencies]
