@@ -1,0 +1,31 @@
+paths:
+  - ~/Documents
+  - ~/Projects
+ignore_patterns:
+  - "*.log"
+  - "node_modules/**"
+  - ".git/**"
+  - "__pycache__/**"
+  - ".venv/**"
+  - "venv/**"
+  - "*.pyc"
+  - "*.pyo"
+  - "*.egg-info/**"
+  - "dist/**"
+  - "build/**"
+embedding_model: nomic-embed-text
+default_chat_model: qwen2.5:14b
+chunk_size_tokens: 800
+chunk_overlap_tokens: 100
+top_k_dense: 20
+top_k_sparse: 20
+final_k: 8
+context_budget_tokens: 6000
+ocr_enabled: true
+vision_caption_enabled: false
+vision_model: llama3.2-vision:11b
+ollama_base_url: http://localhost:11434
+server_host: localhost
+server_port: 8080
+embedding_batch_size: 32
+data_dir: ./data

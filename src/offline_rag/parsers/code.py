@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+LANG_MAP: dict[str, str] = {
+    ".py": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".c": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".h": "c",
+    ".hpp": "cpp",
+    ".cs": "csharp",
+    ".rb": "ruby",
+    ".php": "php",
+    ".swift": "swift",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".scala": "scala",
+    ".r": "r",
+    ".m": "matlab",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "zsh",
+    ".fish": "fish",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".json": "json",
+    ".toml": "toml",
+    ".ini": "ini",
+    ".cfg": "ini",
+    ".html": "html",
+    ".htm": "html",
+    ".css": "css",
+    ".scss": "scss",
+    ".sass": "sass",
+    ".sql": "sql",
+    ".lua": "lua",
+    ".vim": "vim",
+    ".el": "elisp",
+    ".clj": "clojure",
+    ".ex": "elixir",
+    ".exs": "elixir",
+    ".erl": "erlang",
+    ".hs": "haskell",
+    ".ml": "ocaml",
+    ".fs": "fsharp",
+    ".dart": "dart",
+    ".jl": "julia",
+    ".nim": "nim",
+    ".zig": "zig",
+    ".v": "v",
+}
+
+
+def parse_code(path: Path) -> tuple[str, dict]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lang = LANG_MAP.get(path.suffix.lower(), "text")
+    return text, {"file_type": "code", "lang": lang}

@@ -1,0 +1,45 @@
+[project]
+name = "offline-rag"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "lancedb>=0.10",
+    "pyarrow>=15",
+    "tantivy>=0.22",
+    "pymupdf>=1.24",
+    "python-docx>=1.1",
+    "pytesseract>=0.3.13",
+    "Pillow>=10",
+    "click>=8.1",
+    "tqdm>=4.66",
+    "rich>=13",
+    "tiktoken>=0.7",
+    "watchdog>=4",
+    "pyyaml>=6",
+    "aiosqlite>=0.20",
+    "structlog>=24",
+    "pathspec>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+rag = "offline_rag.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/offline_rag"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
